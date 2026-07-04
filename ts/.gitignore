@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+graphify-ast-out/
+graphify-out/
+*.ast.json
+*.callgraph.json

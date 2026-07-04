@@ -1,0 +1,29 @@
+{
+  "name": "@graphify/ts",
+  "version": "0.0.1",
+  "private": true,
+  "description": "TypeScript port of graphify — tree-sitter grammar loading (Plan 01)",
+  "type": "module",
+  "scripts": {
+    "sync-wasm": "node grammar/build/sync-wasm.mjs",
+    "smoke": "tsx src/grammar/smoke.ts",
+    "typecheck": "tsc --noEmit",
+    "ingest-smoke": "tsx src/util/smoke.ts",
+    "parse-smoke": "tsx src/parse/smoke.ts",
+    "main": "tsx main.js",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('fs').cpSync('src/grammar/wasm','dist/src/grammar/wasm',{recursive:true})\"",
+    "start": "node dist/main.js",
+    "graph-smoke": "tsx src/graph/smoke.ts",
+    "group-smoke": "tsx src/group/smoke.ts"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "web-tree-sitter": "^0.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tree-sitter-wasms": "^0.1.12",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
