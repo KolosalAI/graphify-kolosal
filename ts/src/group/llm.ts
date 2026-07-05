@@ -24,13 +24,22 @@ function loadDotenv(): void {
   }
 }
 
-export function getLLMConfig(): LLMConfig | null {
+/** Config or the specific reason it's unusable (which env vars are missing) — for debugging. */
+export function llmConfigStatus(): { cfg: LLMConfig | null; reason?: string } {
   loadDotenv();
   const apiKey = process.env.QUICK_LLM_API_KEY;
   const url = process.env.QUICK_LLM_URL;
   const model = process.env.QUICK_LLM_MODEL;
-  if (!apiKey || !url || !model) return null;
-  return { apiKey, url: url.replace(/^https?:\/\//, "").replace(/\/$/, ""), model };
+  const missing: string[] = [];
+  if (!apiKey) missing.push("QUICK_LLM_API_KEY");
+  if (!url) missing.push("QUICK_LLM_URL");
+  if (!model) missing.push("QUICK_LLM_MODEL");
+  if (missing.length) return { cfg: null, reason: `LLM not configured — missing ${missing.join(", ")}` };
+  return { cfg: { apiKey: apiKey!, url: url!.replace(/^https?:\/\//, "").replace(/\/$/, ""), model: model! } };
+}
+
+export function getLLMConfig(): LLMConfig | null {
+  return llmConfigStatus().cfg;
 }
 
 const SYSTEM = [
@@ -51,7 +60,23 @@ function extractJson(content: string): { label?: string; description?: string } 
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function chat(cfg: LLMConfig, user: string, timeoutMs = 30000): Promise<{ label: string; description: string } | null> {
+// Success carries the label; failure carries a human-readable reason for debugging
+// (HTTP status + response snippet, timeout, unparseable body). Never includes the API key.
+type ChatResult =
+  | { ok: true; value: { label: string; description: string } }
+  | { ok: false; error: string };
+
+/** Read a short, whitespace-collapsed snippet of a response body (safe to log). */
+async function bodySnippet(res: Response): Promise<string> {
+  try {
+    const t = (await res.text()).slice(0, 300).replace(/\s+/g, " ").trim();
+    return t ? `: ${t}` : "";
+  } catch {
+    return "";
+  }
+}
+
+async function chat(cfg: LLMConfig, user: string, timeoutMs = 30000): Promise<ChatResult> {
   const body = JSON.stringify({
     model: cfg.model,
     messages: [ { role: "system", content: SYSTEM }, { role: "user", content: user } ],
@@ -59,6 +84,7 @@ async function chat(cfg: LLMConfig, user: string, timeoutMs = 30000): Promise<{ 
     max_tokens: 1200,
     response_format: { type: "json_object" },
   });
+  let lastError = "unknown error";
   for (let attempt = 1; attempt <= 3; attempt++) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -69,20 +95,31 @@ async function chat(cfg: LLMConfig, user: string, timeoutMs = 30000): Promise<{ 
         body,
         signal: ctrl.signal,
       });
-      if (res.status === 429 || res.status >= 500) throw new Error(`http ${res.status}`);
-      if (!res.ok) return null; // 4xx (bad request/auth) — don't retry, fall back
+      // 429 / 5xx are transient → surface the reason but keep retrying.
+      if (res.status === 429 || res.status >= 500) {
+        lastError = `HTTP ${res.status}${await bodySnippet(res)}`;
+        throw new Error(lastError);
+      }
+      // 4xx (bad key → 401/403, bad model/request → 400/404) — permanent, don't retry.
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status}${await bodySnippet(res)}` };
       const json: any = await res.json();
       const content = json?.choices?.[0]?.message?.content ?? "";
       const parsed = extractJson(String(content));
-      if (parsed?.label) return { label: String(parsed.label).slice(0, 60), description: String(parsed.description ?? "").slice(0, 160) };
-      return null;
-    } catch {
+      if (parsed?.label) {
+        return { ok: true, value: { label: String(parsed.label).slice(0, 60), description: String(parsed.description ?? "").slice(0, 160) } };
+      }
+      const raw = String(content).slice(0, 200).replace(/\s+/g, " ").trim();
+      return { ok: false, error: raw ? `response had no JSON label: "${raw}"` : "response content was empty" };
+    } catch (e: any) {
+      // AbortError = our timeout; otherwise a network/DNS/TLS error or the re-thrown HTTP status.
+      if (e?.name === "AbortError") lastError = `timeout after ${timeoutMs}ms`;
+      else if (!String(lastError).startsWith("HTTP")) lastError = String(e?.message ?? e);
       if (attempt < 3) await sleep(400 * attempt);
     } finally {
       clearTimeout(timer);
     }
   }
-  return null;
+  return { ok: false, error: `${lastError} (after 3 attempts)` };
 }
 
 // concurrency-capped map, worker gets the stable input index
@@ -130,7 +167,9 @@ export interface LabelEvent {
 }
 
 export interface LabelerEventMap {
-  start: { featureTotal: number; categoryTotal: number };
+  // `configured` is false when env vars are missing; `configError` says which — so the caller
+  // can explain why everything fell back instead of silently degrading.
+  start: { featureTotal: number; categoryTotal: number; configured: boolean; configError?: string };
   feature: LabelEvent;
   category: LabelEvent;
   progress: { level: "feature" | "category"; done: number; total: number };
@@ -154,7 +193,7 @@ type Handler = (payload: any) => void | Promise<void>;
 export function createLabeler(grouping: Grouping, opts: LabelerOptions = {}): Labeler {
   const concurrency = Math.max(1, opts.concurrency ?? 3);
   const awaitSubs = opts.awaitSubscribers ?? true;
-  const cfg = getLLMConfig();
+  const { cfg, reason: configError } = llmConfigStatus();
   const cache = new Map<string, { label: string; description: string }>();
   const handlers = new Map<string, Handler[]>();
   let started = false;
@@ -170,15 +209,17 @@ export function createLabeler(grouping: Grouping, opts: LabelerOptions = {}): La
     }
   };
 
-  // returns { result, cached, failed }: failed=true only when a configured LLM call errored
+  // returns { result, cached, failed, error }: failed=true (with a reason) only when a
+  // configured LLM call errored. Missing config is reported once via the `start` event.
   const labelOne = async (evidence: string) => {
+    type R = { result: { label: string; description: string } | null; cached: boolean; failed: boolean; error?: string };
     const key = createHash("sha256").update(evidence).digest("hex");
     const hit = cache.get(key);
-    if (hit) return { result: hit, cached: true, failed: false };
-    if (!cfg) return { result: null as null | { label: string; description: string }, cached: false, failed: false };
+    if (hit) return { result: hit, cached: true, failed: false } as R;
+    if (!cfg) return { result: null, cached: false, failed: false } as R;
     const out = await chat(cfg, evidence);
-    if (out) cache.set(key, out);
-    return { result: out, cached: false, failed: out === null };
+    if (out.ok) { cache.set(key, out.value); return { result: out.value, cached: false, failed: false } as R; }
+    return { result: null, cached: false, failed: true, error: out.error } as R;
   };
 
   let labeled = 0;
@@ -194,15 +235,15 @@ export function createLabeler(grouping: Grouping, opts: LabelerOptions = {}): La
       started = true;
 
       const features = grouping.categories.flatMap((c) => c.features);
-      await emit("start", { featureTotal: features.length, categoryTotal: grouping.categories.length });
+      await emit("start", { featureTotal: features.length, categoryTotal: grouping.categories.length, configured: !!cfg, ...(configError ? { configError } : {}) });
 
       let doneF = 0;
       await pool(features, concurrency, async (f, index) => {
         const t = performance.now();
-        const { result, cached, failed } = await labelOne(featureEvidence(f));
+        const { result, cached, failed, error } = await labelOne(featureEvidence(f));
         if (result) { f.label = result.label; f.description = result.description; f.labeledBy = "llm"; labeled++; }
         else fallback++;
-        if (failed) await emit("error", { level: "feature", node: f, error: "llm call failed" });
+        if (failed) await emit("error", { level: "feature", node: f, error: error ?? "llm call failed" });
         await emit("feature", { level: "feature", index, total: features.length, node: f, result, labeledBy: f.labeledBy, fromCache: cached, ms: performance.now() - t });
         await emit("progress", { level: "feature", done: ++doneF, total: features.length });
       });
@@ -210,10 +251,10 @@ export function createLabeler(grouping: Grouping, opts: LabelerOptions = {}): La
       let doneC = 0;
       await pool(grouping.categories, concurrency, async (c, index) => {
         const t = performance.now();
-        const { result, cached, failed } = await labelOne(categoryEvidence(c));
+        const { result, cached, failed, error } = await labelOne(categoryEvidence(c));
         if (result) { c.label = result.label; c.description = result.description; c.labeledBy = "llm"; labeled++; }
         else fallback++;
-        if (failed) await emit("error", { level: "category", node: c, error: "llm call failed" });
+        if (failed) await emit("error", { level: "category", node: c, error: error ?? "llm call failed" });
         await emit("category", { level: "category", index, total: grouping.categories.length, node: c, result, labeledBy: c.labeledBy, fromCache: cached, ms: performance.now() - t });
         await emit("progress", { level: "category", done: ++doneC, total: grouping.categories.length });
       });

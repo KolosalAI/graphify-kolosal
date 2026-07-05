@@ -1,11 +1,17 @@
-// buildGrouping (Plan 08, Stages 1–4): assemble the category→feature→module tree from the
-// folder/naming backbone, then validate it against community detection (agreement + flags)
-// and rank god nodes per level. Deterministic; fallback labels (Stage 5 LLM adds real ones).
+// buildGrouping — assemble the category→feature→module tree, then validate it against
+// community detection (agreement + flags) and rank god nodes per level. Deterministic;
+// fallback labels (Stage 5 LLM adds real ones).
+//
+// Plan 11: the feature cut is VOCABULARY CLUSTERING (Pillar A) + domain-dictionary
+// enforcement (Pillar C), replacing Plan 08's folder-L1 cut which only worked on
+// feature-sliced repos. The folder cut remains as a fallback (flat/token-less corpora,
+// or featureMode:"folder").
 import type { CallGraph } from "../graph/model.js";
 import { rankGodNodes } from "../graph/rank.js";
 import { projectToModules } from "../graph/project.js";
 import { detectCommunities } from "./community.js";
 import { partitionByFolders } from "./folders.js";
+import { detectFeatures, type VocabFeature } from "./vocabulary.js";
 import type { Category, Feature, GroupFlag, Grouping, GroupingOptions, ModuleRef } from "./types.js";
 
 function titleCase(s: string): string {
@@ -19,9 +25,18 @@ function titleCase(s: string): string {
 }
 const slug = (s: string) => s.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "x";
 
-export function buildGrouping(graph: CallGraph, files: string[], _opts: GroupingOptions = {}): Grouping {
-  const raw = partitionByFolders(files);
+// One assembled slot: a feature-in-a-category, carrying its raw membership + (Plan 11) the
+// vocabulary feature it came from so per-feature evidence flows onto the final Feature.
+interface FSlot {
+  id: string;
+  catLabel: string;
+  label: string;
+  source: Feature["source"];
+  modules: string[];
+  vf?: VocabFeature;
+}
 
+export function buildGrouping(graph: CallGraph, files: string[], opts: GroupingOptions = {}): Grouping {
   // god nodes, globally ranked once; grouped per file preserving rank order.
   const gods = rankGodNodes(graph, { topN: Number.MAX_SAFE_INTEGER });
   const godByFile = new Map<string, string[]>();
@@ -30,23 +45,62 @@ export function buildGrouping(graph: CallGraph, files: string[], _opts: Grouping
   // community detection on the module graph (the validator).
   const community = detectCommunities(projectToModules(graph));
 
-  // assign ids + membership maps
+  // ── feature cut: vocabulary clustering (Plan 11) with a folder fallback ──────
+  const catOrder: string[] = [];
+  const slotsByCat = new Map<string, FSlot[]>();
+  let domainMeta: { domain?: string; domainMatched?: string[]; expectedNotFound?: string[]; excludedTests?: number } = {};
+  let featureMode: "vocabulary" | "folder" = "folder";
+
+  const useVocab = opts.featureMode !== "folder";
+  const vocab = useVocab ? detectFeatures(files, godByFile, opts.feature) : null;
+  const hasRealFeatures = !!vocab && vocab.features.some((f) => f.token !== "(core)");
+
+  const pushSlot = (catLabel: string, slot: FSlot) => {
+    if (!slotsByCat.has(catLabel)) { slotsByCat.set(catLabel, []); catOrder.push(catLabel); }
+    slotsByCat.get(catLabel)!.push(slot);
+  };
+
+  if (vocab && hasRealFeatures) {
+    featureMode = "vocabulary";
+    domainMeta = {
+      ...(vocab.domain ? { domain: vocab.domain } : {}),
+      ...(vocab.domainMatched.length ? { domainMatched: vocab.domainMatched } : {}),
+      ...(vocab.expectedNotFound.length ? { expectedNotFound: vocab.expectedNotFound } : {}),
+      excludedTests: vocab.excludedTests,
+    };
+    const usedIds = new Set<string>();
+    for (const vf of vocab.features) {
+      const cid = `cat:${slug(vf.category)}`;
+      let fid = `${cid}/${slug(vf.label)}`;
+      let k = 2;
+      while (usedIds.has(fid)) fid = `${cid}/${slug(vf.label)}-${k++}`;
+      usedIds.add(fid);
+      pushSlot(vf.category, { id: fid, catLabel: vf.category, label: vf.label, source: vf.source, modules: vf.modules, vf });
+    }
+  } else {
+    // folder-L1 cut (Plan 08)
+    const raw = partitionByFolders(files);
+    for (const c of raw) {
+      const cid = `cat:${slug(c.label)}`;
+      const used = new Set<string>();
+      for (const f of c.features) {
+        let fid = `${cid}/${slug(f.label)}`;
+        let k = 2;
+        while (used.has(fid)) fid = `${cid}/${slug(f.label)}-${k++}`;
+        used.add(fid);
+        pushSlot(c.label, { id: fid, catLabel: c.label, label: titleCase(f.label), source: f.source, modules: f.modules });
+      }
+    }
+  }
+
+  // flatten slots + membership maps
+  const featSlots: FSlot[] = [];
   const relFeature = new Map<string, string>(); // relPath -> featureId
   const relCategory = new Map<string, string>(); // relPath -> category label
-  const catIds = new Map<string, string>();
-  type FSlot = { id: string; catLabel: string; raw: { label: string; source: "folder" | "name"; modules: string[] } };
-  const featSlots: FSlot[] = [];
-  for (const c of raw) {
-    const cid = `cat:${slug(c.label)}`;
-    catIds.set(c.label, cid);
-    const used = new Set<string>();
-    for (const f of c.features) {
-      let fid = `${cid}/${slug(f.label)}`;
-      let k = 2;
-      while (used.has(fid)) fid = `${cid}/${slug(f.label)}-${k++}`;
-      used.add(fid);
-      featSlots.push({ id: fid, catLabel: c.label, raw: f });
-      for (const m of f.modules) { relFeature.set(m, fid); relCategory.set(m, c.label); }
+  for (const cat of catOrder) {
+    for (const slot of slotsByCat.get(cat)!) {
+      featSlots.push(slot);
+      for (const m of slot.modules) { relFeature.set(m, slot.id); relCategory.set(m, cat); }
     }
   }
 
@@ -104,7 +158,7 @@ export function buildGrouping(graph: CallGraph, files: string[], _opts: Grouping
   const bySlot = new Map<string, Feature>();
   let totalFlags = 0;
   for (const slot of featSlots) {
-    const mods = slot.raw.modules;
+    const mods = slot.modules;
     const modules: ModuleRef[] = mods.map((rel) => ({ id: `module:${rel}`, relPath: rel, godNodes: (godByFile.get(rel) ?? []).slice(0, 3) }));
 
     // structural agreement: share of modules in the dominant community
@@ -131,35 +185,48 @@ export function buildGrouping(graph: CallGraph, files: string[], _opts: Grouping
     }
     totalFlags += flags.length;
 
+    const vf = slot.vf;
     const feature: Feature = {
       id: slot.id,
-      label: titleCase(slot.raw.label),
+      label: slot.label,
       description: featGods.get(slot.id)?.[0] ? `Centered on ${featGods.get(slot.id)![0]}` : `${mods.length} module${mods.length > 1 ? "s" : ""}`,
-      source: slot.raw.source,
+      source: slot.source,
       modules,
       godNodes: featGods.get(slot.id) ?? [],
       cohesion: Number(cohesion.toFixed(3)),
       structuralAgreement: Number(domShare.toFixed(3)),
       flags,
       labeledBy: "fallback",
+      ...(vf && vf.token !== "(core)"
+        ? {
+            domainToken: vf.token,
+            ...(vf.aliases.length ? { aliases: vf.aliases } : {}),
+            ...(vf.canonical ? { canonical: vf.canonical } : {}),
+            ...(vf.domain ? { domain: vf.domain } : {}),
+            confidence: vf.confidence,
+            evidence: { crossLayerSpread: vf.crossLayerSpread, ...(vf.entryPoints ? { entryPoints: vf.entryPoints } : {}) },
+          }
+        : {}),
     };
     bySlot.set(slot.id, feature);
   }
 
-  // assemble categories
-  const categories: Category[] = raw.map((c) => {
-    const features = c.features.map((_, i) => bySlot.get(featSlots.find((s) => s.catLabel === c.label && s.raw === c.features[i])!.id)!).filter(Boolean);
+  // assemble categories (deterministic: catOrder)
+  const categories: Category[] = catOrder.map((cat) => {
+    const features = slotsByCat.get(cat)!.map((s) => bySlot.get(s.id)!).filter(Boolean);
     const moduleCount = features.reduce((n, f) => n + f.modules.length, 0);
     return {
-      id: catIds.get(c.label)!,
-      label: titleCase(c.label),
-      description: catGods.get(c.label)?.[0] ? `Anchored by ${catGods.get(c.label)![0]}` : `${moduleCount} modules`,
+      id: `cat:${slug(cat)}`,
+      label: titleCase(cat),
+      description: catGods.get(cat)?.[0] ? `Anchored by ${catGods.get(cat)![0]}` : `${moduleCount} modules`,
       features,
       moduleCount,
-      godNodes: catGods.get(c.label) ?? [],
+      godNodes: catGods.get(cat) ?? [],
       labeledBy: "fallback",
     };
   });
+  // biggest categories first
+  categories.sort((a, b) => b.moduleCount - a.moduleCount || (a.label < b.label ? -1 : 1));
 
   const uncategorized = categories.filter((c) => c.label === "Root").reduce((n, c) => n + c.moduleCount, 0);
   return {
@@ -171,6 +238,8 @@ export function buildGrouping(graph: CallGraph, files: string[], _opts: Grouping
       llm: false,
       flags: totalFlags,
       uncategorized,
+      featureMode,
+      ...domainMeta,
     },
   };
 }
