@@ -164,20 +164,33 @@ async function runZip(path) {
     };
     console.log(
       `\nlogical grouping: ${grouping.meta.categoryCount} categories, ` +
-        `${grouping.meta.featureCount} features, ${grouping.meta.flags} flags`,
+        `${grouping.meta.featureCount} features, ${grouping.meta.flags} flags` +
+        ` (${grouping.meta.featureMode ?? "folder"})`,
     );
+    if (grouping.meta.domain) {
+      console.log(
+        `  domain:  ${grouping.meta.domain}  (${grouping.meta.domainMatched?.length ?? 0} canonical features` +
+          `${grouping.meta.expectedNotFound?.length ? `, ${grouping.meta.expectedNotFound.length} expected-not-found` : ""})`,
+      );
+    }
+    if (grouping.meta.excludedTests) console.log(`  tests:   ${grouping.meta.excludedTests} excluded from features`);
     if (process.argv.slice(3).includes("--no-llm")) {
       publish(); // deterministic labels, single write
       for (const c of grouping.categories) printCategory(c);
     } else {
       const labeler = createLabeler(grouping, { concurrency: 3 });
-      labeler.on("start", (s) => console.log(`labeling ${s.featureTotal} features via LLM (concurrency 3)…`));
+      labeler.on("start", (s) => {
+        if (!s.configured) console.log(`⚠ ${s.configError} — using deterministic fallback labels`);
+        else console.log(`labeling ${s.featureTotal} features via LLM (concurrency 3)…`);
+      });
       labeler.on("feature", (e) => {
         console.log(`  ✓ ${e.node.label}  (${e.labeledBy}, ${fmtMs(e.ms)}${e.fromCache ? ", cached" : ""})`);
         publish(); // ← publish JSON as it goes
       });
       labeler.on("category", (e) => { console.log(`  ▸ ${e.node.label}`); publish(); });
-      labeler.on("error", (e) => console.log(`  ! ${e.node.label}: ${e.error} → fallback`));
+      // Surface the real failure (HTTP 401 bad key, HTTP 400 bad model, timeout, unparseable
+      // response…) so the LLM can be debugged, instead of a generic "failed".
+      labeler.on("error", (e) => console.log(`  ! LLM error [${e.level} "${e.node.label}"]: ${e.error}  → fallback`));
       labeler.on("done", (d) => { publish(); console.log(`labeled ${d.labeled}, fallback ${d.fallback}${grouping.meta.llm ? ` (${grouping.meta.model})` : ""}`); });
       await labeler.run();
     }

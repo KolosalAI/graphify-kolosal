@@ -1,5 +1,20 @@
 # Plan 11 — Language-Agnostic Feature Detection (Pillar A: vocabulary clustering → refined by Pillar B)
 
+> **Execution status — DONE** (Pillars A + C + light B). `src/group/vocabulary.ts` implements
+> the tokenizer → role/layer-affix strip → domain-token clustering → cross-layer-spread scoring
+> → category reconciliation → **Pillar C** domain-dictionary enforcement (`detectDomain` /
+> `canonicalFeature`). Wired into `buildGrouping` (replaces the folder-L1 cut; folder cut kept
+> as fallback for token-less corpora / `featureMode:"folder"`). **Light Pillar B** = anchor-layer
+> (pages/routes/…) modules count as entry points → `source:"token+entry"`, `confidence:"high"`,
+> `evidence.entryPoints`. Full call-graph reachability slicing (split/merge by route) is **not**
+> implemented — anchor-layer detection covers the observed failure; reachability slicing is the
+> remaining Pillar B work. Verified on `sample_source_planout`: **domain=ecommerce**, features
+> include **Cart / Homepage / Product / Product Search** (+ Catalog, Recommendations, Reviews,
+> Coupon, Authentication), 90 test modules excluded, config/manifest + synthetic-symbol noise
+> filtered, UI primitives folded into a Core bucket. `expectedNotFound` lists dictionary features
+> with no code (Checkout, Order, Payment, …). Unrelated corpus → `domain=null`, no enforcement.
+
+
 **Goal:** Detect real product features — `Cart`, `Homepage`, `Product Search`, `Checkout` —
 in **any language and any project layout**, replacing Plan 08's folder-`L1` feature cut
 which only works on feature-sliced repos. **Pillar A (domain-token clustering)** is the core,
