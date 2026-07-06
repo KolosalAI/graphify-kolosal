@@ -29,6 +29,33 @@ export interface Feature {
   domain?: string; // detected domain: "ecommerce" | "banking" | …
   confidence?: "high" | "medium" | "low";
   evidence?: { crossLayerSpread: number; entryPoints?: string[] };
+  // ── Plan 12 (common vs business) ────────────────────────────────────────────
+  tier?: Tier; // "business" | "common"
+  commonSignals?: string[]; // why it was tiered common (audit)
+  uses?: string[]; // forward cross-link → common featureIds (post-ubiquity-trim)
+  usedBy?: string[]; // inverse cross-link ← business featureIds (on common features)
+  dataModels?: string[]; // data-model featureIds this feature operates on
+  // ── Plan 13 (interconnection splitting) ─────────────────────────────────────
+  ops?: FeatureOperation[]; // business-meaningful operations within this feature (verb+noun)
+}
+
+export type Tier = "business" | "common";
+
+// Plan 13: an operation = an interconnected core inside a business feature (Update Product, …).
+export interface FeatureOperation {
+  key: string;
+  label: string; // "Update Product"
+  verb: string;
+  symbols: string[]; // member symbol qualifiedNames
+  modules: string[]; // hosting relPaths
+}
+// Plan 13: a page/route that wires operations together — references them, does not own them.
+export interface Consumer {
+  id: string;
+  label: string;
+  kind: "page" | "component" | "route" | "module";
+  modules: string[];
+  references: string[]; // operation keys
 }
 
 export interface Category {
@@ -39,11 +66,15 @@ export interface Category {
   moduleCount: number;
   godNodes: string[];
   labeledBy: "llm" | "fallback";
+  tier?: Tier; // Plan 12
 }
 
+// Plan 12: the output nests two tiers, each its own category tree.
 export interface Grouping {
-  categories: Category[];
+  business: { categories: Category[] };
+  common: { categories: Category[] };
   meta: {
+    schemaVersion: number; // Plan 12: 2 = nested business/common
     moduleCount: number;
     categoryCount: number;
     featureCount: number;
@@ -57,6 +88,14 @@ export interface Grouping {
     expectedNotFound?: string[]; // dictionary features with no code (advisory)
     excludedTests?: number; // test modules kept out of feature detection
     featureMode?: "vocabulary" | "folder"; // which cut produced the features
+    // ── Plan 12 ─────────────────────────────────────────────────────────────
+    businessFeatureCount?: number;
+    commonFeatureCount?: number;
+    ubiquityThreshold?: number; // effective distinct-feature fan-in cutoff
+    ubiquitous?: string[]; // trimmed ubiquitous symbols/modules (logger, env, …)
+    // ── Plan 13 ─────────────────────────────────────────────────────────────
+    operationCount?: number; // total business operations surfaced across features
+    consumers?: Consumer[]; // pages/routes wiring operations together
   };
 }
 
@@ -67,6 +106,8 @@ export interface GroupingOptions {
   feature?: import("./vocabulary.js").FeatureConfig;
   /** Force the folder-L1 cut (Plan 08) instead of vocabulary clustering (Plan 11). */
   featureMode?: "vocabulary" | "folder";
+  /** Plan 12 ubiquity cutoff: fraction (0,1) → ×featureCount, or absolute int; floor 5. */
+  ubiquityThreshold?: number;
 }
 
 // ── slim summary (category-feature.json): no module lists ────────────────────
@@ -77,6 +118,11 @@ export interface FeatureSummary {
   moduleCount: number;
   godNodes: string[];
   flags: GroupFlag["kind"][];
+  tier?: Tier; // Plan 12
+  uses?: string[]; // Plan 12 cross-links
+  usedBy?: string[];
+  dataModels?: string[];
+  ops?: string[]; // Plan 13 operation labels
 }
 export interface CategorySummary {
   id: string;
@@ -87,6 +133,18 @@ export interface CategorySummary {
   features: FeatureSummary[];
 }
 export interface CategoryFeatureSummary {
-  categories: CategorySummary[];
-  meta: { categoryCount: number; featureCount: number; moduleCount: number; llm: boolean; model?: string };
+  business: { categories: CategorySummary[] };
+  common: { categories: CategorySummary[] };
+  meta: {
+    schemaVersion: number;
+    categoryCount: number;
+    featureCount: number;
+    businessFeatureCount: number;
+    commonFeatureCount: number;
+    moduleCount: number;
+    llm: boolean;
+    model?: string;
+    domain?: string;
+    ubiquitous?: string[];
+  };
 }

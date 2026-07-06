@@ -234,8 +234,10 @@ export function createLabeler(grouping: Grouping, opts: LabelerOptions = {}): La
       if (started) return grouping;
       started = true;
 
-      const features = grouping.categories.flatMap((c) => c.features);
-      await emit("start", { featureTotal: features.length, categoryTotal: grouping.categories.length, configured: !!cfg, ...(configError ? { configError } : {}) });
+      // Plan 12: label across BOTH tiers uniformly.
+      const allCategories = [...grouping.business.categories, ...grouping.common.categories];
+      const features = allCategories.flatMap((c) => c.features);
+      await emit("start", { featureTotal: features.length, categoryTotal: allCategories.length, configured: !!cfg, ...(configError ? { configError } : {}) });
 
       let doneF = 0;
       await pool(features, concurrency, async (f, index) => {
@@ -249,17 +251,17 @@ export function createLabeler(grouping: Grouping, opts: LabelerOptions = {}): La
       });
 
       let doneC = 0;
-      await pool(grouping.categories, concurrency, async (c, index) => {
+      await pool(allCategories, concurrency, async (c, index) => {
         const t = performance.now();
         const { result, cached, failed, error } = await labelOne(categoryEvidence(c));
         if (result) { c.label = result.label; c.description = result.description; c.labeledBy = "llm"; labeled++; }
         else fallback++;
         if (failed) await emit("error", { level: "category", node: c, error: error ?? "llm call failed" });
-        await emit("category", { level: "category", index, total: grouping.categories.length, node: c, result, labeledBy: c.labeledBy, fromCache: cached, ms: performance.now() - t });
-        await emit("progress", { level: "category", done: ++doneC, total: grouping.categories.length });
+        await emit("category", { level: "category", index, total: allCategories.length, node: c, result, labeledBy: c.labeledBy, fromCache: cached, ms: performance.now() - t });
+        await emit("progress", { level: "category", done: ++doneC, total: allCategories.length });
       });
 
-      grouping.meta.llm = grouping.categories.some((c) => c.labeledBy === "llm" || c.features.some((f) => f.labeledBy === "llm"));
+      grouping.meta.llm = allCategories.some((c) => c.labeledBy === "llm" || c.features.some((f) => f.labeledBy === "llm"));
       if (grouping.meta.llm && cfg) grouping.meta.model = cfg.model;
       await emit("done", { grouping, labeled, fallback });
       return grouping;

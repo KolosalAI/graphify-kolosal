@@ -33,8 +33,10 @@ async function main() {
   const graph = generateCallGraph(files);
   const g = buildGrouping(graph, files.map((f) => f.relPath));
 
-  const cat = (label: string) => g.categories.find((c) => c.label === label);
-  check("category Auth exists", !!cat("Auth"), g.categories.map((c) => c.label).join(","));
+  const allCats = (gg: typeof g) => [...gg.business.categories, ...gg.common.categories];
+  const cat = (label: string) => allCats(g).find((c) => c.label === label);
+  check("category Auth exists", !!cat("Auth"), allCats(g).map((c) => c.label).join(","));
+  check("Auth/Billing are business tier", g.business.categories.length >= 2);
   check("category Billing exists", !!cat("Billing"));
   check("common prefix 'app' stripped (no App category)", !cat("App"));
   const auth = cat("Auth");
@@ -54,7 +56,8 @@ async function main() {
   // summary projection: no modules, counts preserved
   const sum = toCategoryFeatureSummary(g);
   check("summary has no module arrays", !JSON.stringify(sum).includes('"modules"'));
-  const sumAuth = sum.categories.find((c) => c.label === "Auth");
+  check("summary is two-tier (business/common)", !!sum.business && !!sum.common);
+  const sumAuth = [...sum.business.categories, ...sum.common.categories].find((c) => c.label === "Auth");
   check("summary Auth moduleCount matches full tree", sumAuth?.moduleCount === auth?.moduleCount, `${sumAuth?.moduleCount} vs ${auth?.moduleCount}`);
   check("summary feature has moduleCount not modules", (sumAuth?.features[0] as any)?.modules === undefined && typeof sumAuth?.features[0]?.moduleCount === "number");
 
@@ -65,7 +68,8 @@ async function main() {
   // Plan 09: streaming labeler pub-sub (forced fallback → no network calls)
   process.env.QUICK_LLM_API_KEY = ""; // empty → getLLMConfig returns null → fallback path
   const gs = buildGrouping(graph, files.map((f) => f.relPath));
-  const featureCount = gs.categories.flatMap((c) => c.features).length;
+  const gsCats = [...gs.business.categories, ...gs.common.categories];
+  const featureCount = gsCats.flatMap((c) => c.features).length;
   const log: Array<[string, any]> = [];
   const labeler = createLabeler(gs, { concurrency: 3 });
   labeler.on("start", (p) => { log.push(["start", p]); });
@@ -86,7 +90,7 @@ async function main() {
   check("order: start → features → categories → done", startIdx === 0 && lastFeat < firstCat && log[log.length - 1][0] === "done");
   check("done returns same grouping (back-compat)", returned === gs && gs.meta.llm === false);
   const doneEvt = log.find((x) => x[0] === "done")![1];
-  check("done tallies fallback = features+categories", doneEvt.fallback === featureCount + gs.categories.length);
+  check("done tallies fallback = features+categories", doneEvt.fallback === featureCount + gsCats.length);
 
   console.log(`\n${failures === 0 ? "ALL PASSED" : failures + " FAILED"}`);
   process.exit(failures === 0 ? 0 : 1);

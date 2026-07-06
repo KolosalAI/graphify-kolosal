@@ -5,9 +5,34 @@
 > takes the **Business** subset and splits it into operation-level features by cutting connectors —
 > which are largely the same nodes Plan 12 already marked `reference`.
 
-**Status:** DRAFT / brainstorm. Not executed. This plan critiques Plan 11's lexical clustering
-and proposes call-graph interconnection as the real feature boundary. Three core decisions are
-now **locked** (see "Decisions"); the rest of "Still open" is the remaining brainstorm.
+**Status:** DONE (core). Splits Plan 12's business features into operation-level cores.
+
+> **Execution notes.** `src/group/operations.ts` (`analyzeOperations`) detects **operation entries**
+> = named business-verb **+ noun** methods (Update Product, Clear Cart, Toggle Sale), assigns each
+> its exclusively-reached private helpers, cuts **shared accessors** (reached by ≥2 entries) and
+> UI/lambda/component symbols as connectors, merges ops by label (client `update` + server
+> `updateProduct` → one "Update Product"), and applies the **legibility gate** (split only when ≥2
+> verb+noun ops; else keep the feature whole). Pages/hooks with no op entry become **consumers**
+> with `references: [opKeys]`. Wired into `buildGrouping`; ops surface as `Feature.ops[]`,
+> `meta.{operationCount, consumers}`. Verified on `sample_source_planout`: 48 operations across 7
+> split features (Product/Cart/Coupon/Banner/Variant/Category/Recommendations), Homepage/Product
+> Search/Authentication kept whole, `findById`/`save`/render-plumbing never promoted, deterministic.
+>
+> **Deviations from the full algorithm (pragmatic, documented):**
+> 1. **Representation:** operations are a structured **`Feature.ops[]` list on the business feature**
+>    (Category → Feature → Operations), *not* exploded into ~48 sibling features — a direct
+>    application of Plan 12's legibility principle (48 sibling op-features floods the tree). The
+>    `Feature.ops` data model already anticipated this. Reversible if standalone op-features are
+>    wanted.
+> 2. **Connector detection:** uses **entry-reachability** (shared = reached by ≥2 op entries) +
+>    role/name (UI/lambda/component) rather than explicit **Brandes betweenness / Louvain tiebreak**.
+>    On the small intra-feature symbol graphs the entry-seeded decomposition subsumes both; add
+>    betweenness if larger, denser features need it.
+> 3. **Consumers** are limited by the client/server network boundary (calls don't cross it), so
+>    `references` resolve within a runtime tier only (2 consumers on the sample).
+
+This plan critiques Plan 11's lexical clustering and proposes call-graph interconnection as the real
+feature boundary. Three core decisions are **locked** (see "Decisions").
 
 > **Legibility gate (from Plan 12's governing principle — overrides granularity here):** split to
 > operation-level **only when the operations are business-meaningful** (Apply Coupon, Track Order).

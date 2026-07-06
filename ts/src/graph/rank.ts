@@ -13,6 +13,8 @@ export interface GodNode {
   outDegree: number;
   score: number; // per `direction` (+ weighted)
   utilityHub?: true; // broad fan-in / low fan-out leaf (advisory)
+  reference?: boolean; // Plan 12: infra/shared (common tier or broadly reused), not a business capability
+  referencedBy?: number; // Plan 12: distinct business features that call this node's module
 }
 
 export interface GodNodeOptions {

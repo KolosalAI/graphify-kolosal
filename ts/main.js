@@ -12,7 +12,7 @@ import { prepareZip } from "./src/util/prepare.js";
 import { getParser, resolveGrammar } from "./src/grammar/loader.js";
 import { serializeAst, toSExpression, errorCount } from "./src/parse/index.js";
 import { generateCallGraph, buildCallGraph, rankGodNodes, findDeadCode } from "./src/graph/index.js";
-import { buildGrouping, toCategoryFeatureSummary, createLabeler } from "./src/group/index.js";
+import { buildGrouping, toCategoryFeatureSummary, createLabeler, annotateGodReferences } from "./src/group/index.js";
 
 function usage() {
   console.log("Usage: npx tsx main.js <file|archive.zip> [--sexp]");
@@ -34,8 +34,14 @@ function printCategory(c) {
   console.log(`  ▸ ${c.label}  (${c.moduleCount} modules${c.godNodes[0] ? `, ~${c.godNodes[0]}` : ""})`);
   for (const f of c.features) {
     const fl = f.flags.length ? `  ⚑ ${f.flags.map((x) => x.kind).join(",")}` : "";
-    console.log(`      • ${f.label}  (${f.modules.length}, cohesion ${f.cohesion}, agree ${f.structuralAgreement})${fl}`);
+    const links = [f.uses && `uses ${f.uses.length}`, f.dataModels && `models ${f.dataModels.length}`, f.usedBy && `usedBy ${f.usedBy.length}`].filter(Boolean).join(", ");
+    console.log(`      • ${f.label}  (${f.modules.length}, cohesion ${f.cohesion}${links ? `, ${links}` : ""})${fl}`);
+    if (f.ops?.length) console.log(`          ops: ${f.ops.map((o) => o.label).join(" · ")}`);
   }
+}
+function printTier(name, tier) {
+  console.log(`\n══ ${name} ══`);
+  for (const c of tier.categories) printCategory(c);
 }
 
 async function runFile(path, opts) {
@@ -154,6 +160,9 @@ async function runZip(path) {
     // Logical grouping (Plan 08): category → feature → module tree.
     const moduleFiles = graph.nodes.filter((n) => n.kind === "module").map((n) => n.file);
     const grouping = buildGrouping(graph, moduleFiles);
+    // Plan 12: flag god nodes as reference (infra/shared) vs business, then re-write godnodes.json.
+    annotateGodReferences(gods, graph, grouping);
+    writeFileSync(join(outDir, "godnodes.json"), JSON.stringify(gods, null, 2));
     const tAnalyze = performance.now();
 
     // Stage 5 (Plan 09): main SUBSCRIBES to the streaming labeler and PUBLISHES the JSON
@@ -164,8 +173,8 @@ async function runZip(path) {
     };
     console.log(
       `\nlogical grouping: ${grouping.meta.categoryCount} categories, ` +
-        `${grouping.meta.featureCount} features, ${grouping.meta.flags} flags` +
-        ` (${grouping.meta.featureMode ?? "folder"})`,
+        `${grouping.meta.featureCount} features (${grouping.meta.businessFeatureCount} business / ` +
+        `${grouping.meta.commonFeatureCount} common), ${grouping.meta.flags} flags (${grouping.meta.featureMode ?? "folder"})`,
     );
     if (grouping.meta.domain) {
       console.log(
@@ -174,9 +183,12 @@ async function runZip(path) {
       );
     }
     if (grouping.meta.excludedTests) console.log(`  tests:   ${grouping.meta.excludedTests} excluded from features`);
+    if (grouping.meta.ubiquitous?.length) console.log(`  ubiquity: ${grouping.meta.ubiquitous.length} trimmed (T=${grouping.meta.ubiquityThreshold}): ${grouping.meta.ubiquitous.slice(0, 6).join(", ")}${grouping.meta.ubiquitous.length > 6 ? " …" : ""}`);
+    if (grouping.meta.operationCount) console.log(`  ops:     ${grouping.meta.operationCount} business operations across ${grouping.meta.consumers?.length ?? 0} consumers`);
     if (process.argv.slice(3).includes("--no-llm")) {
       publish(); // deterministic labels, single write
-      for (const c of grouping.categories) printCategory(c);
+      printTier("BUSINESS", grouping.business);
+      printTier("COMMON", grouping.common);
     } else {
       const labeler = createLabeler(grouping, { concurrency: 3 });
       labeler.on("start", (s) => {

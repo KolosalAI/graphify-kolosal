@@ -6,6 +6,8 @@ export { toCategoryFeatureSummary } from "./summary.js";
 export { detectCommunities } from "./community.js";
 export { partitionByFolders } from "./folders.js";
 export { detectFeatures } from "./vocabulary.js";
+export { annotateGodReferences } from "./tiers.js";
+export { analyzeOperations } from "./operations.js";
 export type { VocabFeature, VocabResult, FeatureConfig } from "./vocabulary.js";
 export { isTestPath } from "./tests.js";
 export type {

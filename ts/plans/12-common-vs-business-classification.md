@@ -1,7 +1,22 @@
 # Plan 12 — Common vs Business classification (split infrastructure from domain features)
 
-**Status:** DRAFT / brainstorm. Not executed. Runs **after Plan 11** (vocabulary + domain) and
-**before Plan 13** (interconnection splitting). Introduces a top-level tier in the output.
+**Status:** DONE (core). Runs **after Plan 11** (vocabulary + domain) and **before Plan 13**
+(interconnection splitting). Introduces a top-level tier in the output.
+
+> **Execution notes.** Implemented: `src/common/index.ts` (common taxonomy + `classifyCommon` +
+> `UBIQUITY_ELIGIBLE`), `src/group/tiers.ts` (`assignTiers` layer/AST tiering + `annotateGodReferences`),
+> nested `Grouping` schema (`business`/`common`, `schemaVersion:2`, tier/uses/usedBy/dataModels/
+> commonSignals, ubiquity meta), ubiquity trim (business-feature fan-in ≥ `max(5,⌈0.5·featureCount⌉)`,
+> restricted to leaf-utility categories so architectural layers aren't dissolved), business→common
+> cross-links (forward `uses` + inverse `usedBy` + `dataModels`), god-node `reference`/`referencedBy`,
+> and consumer updates (summary/main/smoke/llm). Verified on `sample_source_planout`: 11 business /
+> 24 common features, Core blob gone, `apiClient` god `reference:true`, REST Routes/Persistence/UI
+> Primitives(9 atoms→1)/UI-Components(molecules as features) common, `contentService` the sole
+> ubiquity-trimmed symbol, `Cart.uses=[Repositories & DB]`, deterministic, two-tier
+> `category-feature.json`. **Deferred:** AST fingerprints use graph proxies (barrel = no-defs,
+> types-only = all-interface) rather than full serialized-AST inspection; explicit `@Entity`
+> Data-Models detection and the route→capability inverse `references` edge are left to richer AST /
+> Plan 13. Structural leaf-vs-composer UI detection falls back to atomic-design dirs.
 
 ## Governing principle (overrides Plans 11–13): business-legible first, technical second
 
