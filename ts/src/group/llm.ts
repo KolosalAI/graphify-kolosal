@@ -50,7 +50,7 @@ const SYSTEM = [
   "/no_think",
 ].join(" ");
 
-function extractJson(content: string): { label?: string; description?: string } | null {
+function extractJson(content: string): Record<string, any> | null {
   const t = content.trim();
   try { return JSON.parse(t); } catch { /* reasoning models wrap it */ }
   const m = t.match(/\{[\s\S]*\}/);
@@ -60,11 +60,10 @@ function extractJson(content: string): { label?: string; description?: string } 
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Success carries the label; failure carries a human-readable reason for debugging
+// Success carries the parsed JSON object; failure carries a human-readable reason for debugging
 // (HTTP status + response snippet, timeout, unparseable body). Never includes the API key.
-type ChatResult =
-  | { ok: true; value: { label: string; description: string } }
-  | { ok: false; error: string };
+export type JsonResult = { ok: true; value: Record<string, any> } | { ok: false; error: string };
+type ChatResult = { ok: true; value: { label: string; description: string } } | { ok: false; error: string };
 
 /** Read a short, whitespace-collapsed snippet of a response body (safe to log). */
 async function bodySnippet(res: Response): Promise<string> {
@@ -76,10 +75,14 @@ async function bodySnippet(res: Response): Promise<string> {
   }
 }
 
-async function chat(cfg: LLMConfig, user: string, timeoutMs = 30000): Promise<ChatResult> {
+/**
+ * Generic OpenAI-compatible chat → parsed JSON object. Reusable across labelers (Plan 09) and node
+ * summaries (Plan 15). Same retry/error-surfacing contract; caller picks fields off `value`.
+ */
+export async function chatJson(cfg: LLMConfig, system: string, user: string, timeoutMs = 30000): Promise<JsonResult> {
   const body = JSON.stringify({
     model: cfg.model,
-    messages: [ { role: "system", content: SYSTEM }, { role: "user", content: user } ],
+    messages: [ { role: "system", content: system }, { role: "user", content: user } ],
     temperature: 0.1,
     max_tokens: 1200,
     response_format: { type: "json_object" },
@@ -95,23 +98,15 @@ async function chat(cfg: LLMConfig, user: string, timeoutMs = 30000): Promise<Ch
         body,
         signal: ctrl.signal,
       });
-      // 429 / 5xx are transient → surface the reason but keep retrying.
-      if (res.status === 429 || res.status >= 500) {
-        lastError = `HTTP ${res.status}${await bodySnippet(res)}`;
-        throw new Error(lastError);
-      }
-      // 4xx (bad key → 401/403, bad model/request → 400/404) — permanent, don't retry.
+      if (res.status === 429 || res.status >= 500) { lastError = `HTTP ${res.status}${await bodySnippet(res)}`; throw new Error(lastError); }
       if (!res.ok) return { ok: false, error: `HTTP ${res.status}${await bodySnippet(res)}` };
       const json: any = await res.json();
       const content = json?.choices?.[0]?.message?.content ?? "";
       const parsed = extractJson(String(content));
-      if (parsed?.label) {
-        return { ok: true, value: { label: String(parsed.label).slice(0, 60), description: String(parsed.description ?? "").slice(0, 160) } };
-      }
+      if (parsed) return { ok: true, value: parsed };
       const raw = String(content).slice(0, 200).replace(/\s+/g, " ").trim();
-      return { ok: false, error: raw ? `response had no JSON label: "${raw}"` : "response content was empty" };
+      return { ok: false, error: raw ? `response had no JSON: "${raw}"` : "response content was empty" };
     } catch (e: any) {
-      // AbortError = our timeout; otherwise a network/DNS/TLS error or the re-thrown HTTP status.
       if (e?.name === "AbortError") lastError = `timeout after ${timeoutMs}ms`;
       else if (!String(lastError).startsWith("HTTP")) lastError = String(e?.message ?? e);
       if (attempt < 3) await sleep(400 * attempt);
@@ -120,6 +115,14 @@ async function chat(cfg: LLMConfig, user: string, timeoutMs = 30000): Promise<Ch
     }
   }
   return { ok: false, error: `${lastError} (after 3 attempts)` };
+}
+
+async function chat(cfg: LLMConfig, user: string): Promise<ChatResult> {
+  const r = await chatJson(cfg, SYSTEM, user);
+  if (!r.ok) return r;
+  const p = r.value;
+  if (p.label) return { ok: true, value: { label: String(p.label).slice(0, 60), description: String(p.description ?? "").slice(0, 160) } };
+  return { ok: false, error: "response had no JSON label" };
 }
 
 // concurrency-capped map, worker gets the stable input index

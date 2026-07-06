@@ -8,6 +8,10 @@ export { partitionByFolders } from "./folders.js";
 export { detectFeatures } from "./vocabulary.js";
 export { annotateGodReferences } from "./tiers.js";
 export { analyzeOperations } from "./operations.js";
+export { buildFeatureCallGraphs } from "./callgraphview.js";
+export type { FeatureCallGraph, OperationGraph, CodeNode, CallGraphIndex, CallGraphViewOptions } from "./callgraphview.js";
+export { summarizeFeatureGraphs, heuristicNodeLabel } from "./nodesummary.js";
+export type { NodeSummaryOptions, NodeSummaryStats } from "./nodesummary.js";
 export type { VocabFeature, VocabResult, FeatureConfig } from "./vocabulary.js";
 export { isTestPath } from "./tests.js";
 export type {

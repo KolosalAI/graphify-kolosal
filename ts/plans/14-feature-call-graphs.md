@@ -1,5 +1,17 @@
 # Plan 14 — Per-feature code call graphs (depth-bounded, content-bearing, no LLM)
 
+> **Status: DONE.** `src/group/callgraphview.ts` (`buildFeatureCallGraphs`) roots one tree per Plan 13
+> operation (god-node/out-degree fallback otherwise), walks `calls`+`passes` BFS with a depth cap
+> (`maxDepth=2`), inlines byte-accurate source per node (truncated to 40 lines / 2000 chars with a
+> `… (+K)` marker), marks the tier each call sits in, and dedups cycles as `ref`. Written by main.js
+> to `graphify-out/feature-graphs/<tier>/<feature-slug>/graph.json` + root `index.json`. Verified on
+> `sample_source_planout`: 35 feature folders (11 business / 24 common), 707 nodes, 0 past the cap,
+> frontier nodes carry title+calls but no body, deterministic. **Observation (out of scope, Plan 05):**
+> the view makes call-graph *over-resolution* visible — `updateProduct` shows 17 depth-1 children
+> because untyped `.findById(...)`/`.update(...)` calls resolve to *every* class's method of that
+> name. Plan 14 faithfully renders whatever the graph says; tightening dispatch is Plan 05's
+> receiver-type-table job.
+
 **Goal:** For each feature (and its Plan 13 operations), emit a **call graph you can actually read
 the code from**: a rooted, depth-limited tree of nodes where every node carries the **real source
 code** of that function/method — its title and content. **No LLM** — the code *is* the content;

@@ -46,6 +46,7 @@ export interface FeatureOperation {
   key: string;
   label: string; // "Update Product"
   verb: string;
+  entry: string; // Plan 14: entry symbol node id (root of this operation's call graph)
   symbols: string[]; // member symbol qualifiedNames
   modules: string[]; // hosting relPaths
 }

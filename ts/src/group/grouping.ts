@@ -287,7 +287,7 @@ export function buildGrouping(graph: CallGraph, files: string[], opts: GroupingO
     if (f.tier !== "business") continue;
     const a = analyzeOperations(f.modules.map((m) => m.relPath), graph);
     if (!a.split) continue; // legibility gate: <2 business ops → keep the feature whole
-    f.ops = a.ops.map((o) => ({ key: `${f.id}#${o.key}`, label: o.label, verb: o.verb, symbols: o.symbols, modules: o.modules }));
+    f.ops = a.ops.map((o) => ({ key: `${f.id}#${o.key}`, label: o.label, verb: o.verb, entry: o.entry, symbols: o.symbols, modules: o.modules }));
     f.description = `${a.ops.length} operations · ${f.description}`;
     operationCount += a.ops.length;
     for (const con of a.consumers) consumers.push({ ...con, references: con.references.map((r) => `${f.id}#${r}`) });
