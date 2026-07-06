@@ -11,7 +11,7 @@ export { analyzeOperations } from "./operations.js";
 export { buildFeatureCallGraphs } from "./callgraphview.js";
 export type { FeatureCallGraph, OperationGraph, CodeNode, CallGraphIndex, CallGraphViewOptions } from "./callgraphview.js";
 export { summarizeFeatureGraphs, heuristicNodeLabel } from "./nodesummary.js";
-export type { NodeSummaryOptions, NodeSummaryStats } from "./nodesummary.js";
+export type { NodeSummaryOptions, NodeSummaryStats, SummarizerEvents, FeatureDoneEvent } from "./nodesummary.js";
 export type { VocabFeature, VocabResult, FeatureConfig } from "./vocabulary.js";
 export { isTestPath } from "./tests.js";
 export type {

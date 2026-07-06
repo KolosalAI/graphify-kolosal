@@ -1,5 +1,14 @@
 # Plan 16 — Fuller node descriptions + a live per-feature progress event
 
+> **Status: DONE.** `NODE_SYSTEM` now asks for a full plain-English description (4–5 sentences:
+> steps, inputs, outputs, side-effects; never mentions "the code"/"this function"); `summary` cap
+> raised 200→1000 chars. Added `SummarizerEvents.onFeatureDone` (`FeatureDoneEvent` with
+> index/total/label/tier/op+node counts/llm+fallback counts), emitted from `readyIfDone` with a
+> feature counter; main.js subscribes and prints `✓ [i/total] <label> (<tier>) — N nodes, M ops · X
+> summarized, Y fallback` live per feature. Verified on `sample_source_planout`: summaries are
+> multi-sentence (e.g. 4 sentences / 414 chars), all 35 features print progress in completion order,
+> `--no-llm` still prints (fallback counts). Plan 14/15 behavior unchanged.
+
 Two focused changes on top of Plan 15's node summarizer (`src/group/nodesummary.ts`).
 
 ## 1. Richer summaries — full logic description (4–5 sentences)
