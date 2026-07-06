@@ -6,13 +6,13 @@
 //
 // Run through tsx (the project ships TypeScript sources): `npx tsx main.js <file>`
 // or `npm run main -- <file>`.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
 import { prepareZip } from "./src/util/prepare.js";
 import { getParser, resolveGrammar } from "./src/grammar/loader.js";
 import { serializeAst, toSExpression, errorCount } from "./src/parse/index.js";
 import { generateCallGraph, buildCallGraph, rankGodNodes, findDeadCode } from "./src/graph/index.js";
-import { buildGrouping, toCategoryFeatureSummary, createLabeler, annotateGodReferences } from "./src/group/index.js";
+import { buildGrouping, toCategoryFeatureSummary, createLabeler, annotateGodReferences, buildFeatureCallGraphs, summarizeFeatureGraphs } from "./src/group/index.js";
 
 function usage() {
   console.log("Usage: npx tsx main.js <file|archive.zip> [--sexp]");
@@ -207,6 +207,43 @@ async function runZip(path) {
       await labeler.run();
     }
     const tLabel = performance.now();
+
+    // Plan 14: per-feature, depth-bounded call graphs with the REAL source inlined per node.
+    const readSource = (rel) => { try { return readFileSync(join(prepared.rootDir, rel)); } catch { return null; } };
+    const { graphs, index } = buildFeatureCallGraphs(graph, grouping, readSource, { maxDepth: 2 });
+    const fgRoot = join(outDir, "feature-graphs");
+    const writeFeature = (fg) => { const dir = join(fgRoot, fg.dir); mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, "graph.json"), JSON.stringify(fg, null, 2)); };
+
+    // Write EVERY feature folder unconditionally first — the Plan 14 graphs must always exist,
+    // independent of the LLM step. Clean stale/renamed folders from a previous run.
+    rmSync(fgRoot, { recursive: true, force: true });
+    for (const fg of graphs) writeFeature(fg);
+    writeFileSync(join(fgRoot, "index.json"), JSON.stringify(index, null, 2));
+    console.log(`\nfeature graphs -> ${fgRoot}/<tier>/<feature>/graph.json  (${graphs.length} features, depth ≤ 2)`);
+
+    // Plan 15: enrich each node with a business-friendly title + summary (best-effort, streaming —
+    // re-writes each feature as its nodes finish). A failure here NEVER removes the graphs above.
+    const noLlm = process.argv.slice(3).includes("--no-llm");
+    try {
+      const sumStats = await summarizeFeatureGraphs(
+        graphs,
+        { concurrency: 3, disabled: noLlm },
+        {
+          onStart: (s) => console.log(`  summarizing ${s.uniqueNodes} unique nodes via LLM (concurrency 3)…`),
+          onFeatureReady: writeFeature, // stream: re-write each feature as it completes
+          onFeatureDone: (p) => console.log( // Plan 16: live per-feature progress
+            `  ✓ [${p.index}/${p.total}] ${p.label} (${p.tier}) — ${p.nodeCount} nodes, ${p.operationCount} ops · ${p.llmNodes} summarized, ${p.fallbackNodes} fallback`,
+          ),
+          onError: (e) => console.log(`  ! node summary error: ${e.error}`),
+        },
+      );
+      const summaryNote = sumStats.configured && !noLlm
+        ? `${sumStats.llmNodes} nodes summarized by LLM (${sumStats.model}), ${sumStats.fallbackNodes} fallback`
+        : `fallback titles only${sumStats.configError ? ` (${sumStats.configError})` : noLlm ? " (--no-llm)" : ""}`;
+      console.log(`  summaries: ${summaryNote}`);
+    } catch (e) {
+      console.log(`  ! summaries skipped (${e?.message ?? e}) — Plan 14 graphs kept`);
+    }
 
     console.log(`\ncall graph -> ${outDir}/callgraph.json`);
     console.log(`god nodes  -> ${outDir}/godnodes.json`);
